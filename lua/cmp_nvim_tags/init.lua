@@ -69,16 +69,14 @@ function source:get_debug_name()
 end
 
 function source:complete(request, callback)
-  local items = {}
-  local option = vim.tbl_deep_extend('keep', request.option or {}, default_options)
-  vim.defer_fn(vim.schedule_wrap(function()
-    local input = string.sub(request.context.cursor_before_line, request.offset)
+  local work = assert(vim.loop.new_work(function(input)
+    local items = {}
     local _, tags = pcall(function()
       return vim.fn.getcompletion(input, "tag")
     end)
 
     if type(tags) ~= 'table' then
-      return {}
+      return "tags not found", ""
     end
     tags = tags or {}
     for _, value in pairs(tags) do
@@ -90,11 +88,24 @@ function source:complete(request, callback)
       items[#items+1] = item
     end
 
-    callback({
-      items = items,
-      isIncomplete = true
-    })
-  end), option.complete_defer)
+    return nil, require'utils.luatexts'.save(items)
+  end, function(worker_error, serialized_items)
+    if worker_error then
+      print('cmp-tags worker error:' .. vim.inspect(worker_error))
+      callback(nil)
+      return
+    end
+    local read_ok, items = require'utils.luatexts'.load(serialized_items)
+    if not read_ok then
+      print('cmp-tags read ok:' .. vim.inspect(read_ok) .. ', items:' .. vim.inspect(items))
+      callback(nil)
+    end
+    print('cmp-tags items:' .. vim.inspect(items))
+    callback(items)
+  end))
+
+  local user_input = string.sub(request.context.cursor_before_line, request.offset)
+  work:queue(user_input)
 end
 
 function source:resolve(completion_item, callback)
